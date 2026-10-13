@@ -1,0 +1,70 @@
+name: Update XAU Macro Monitor Feed
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/update-xau-feed.yml"
+  schedule:
+    - cron: "5,15 21,22 * * 1-5"
+
+permissions:
+  contents: write
+
+jobs:
+  update-feed:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download latest XAU feed
+        run: |
+          curl -L --fail --silent --show-error             "https://script.google.com/macros/s/AKfycby8SDoUlHi4C9k9mQGdKTuBtoY7EbF62C2FRfKTidFXu2w6rDc5_0AT2An0-GRqBOUO/exec?limit=1"             -o /tmp/xau-feed.json
+
+      - name: Validate feed
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          p = Path("/tmp/xau-feed.json")
+          data = json.loads(p.read_text(encoding="utf-8"))
+
+          if data.get("status") != "OK":
+              raise SystemExit("Feed status is not OK")
+          if data.get("feed_version") != 2:
+              raise SystemExit("Unexpected feed_version")
+          if data.get("source") != "OANDA:XAUUSD":
+              raise SystemExit("Unexpected source")
+          if data.get("timeframe") != "1D":
+              raise SystemExit("Unexpected timeframe")
+
+          latest = data.get("latest")
+          if not isinstance(latest, dict):
+              raise SystemExit("Missing latest record")
+          if latest.get("symbol") != "OANDA:XAUUSD":
+              raise SystemExit("Unexpected latest.symbol")
+          if latest.get("timeframe") != "1D":
+              raise SystemExit("Unexpected latest.timeframe")
+
+          print("Feed validated:", latest.get("time"), latest.get("close"))
+          PY
+
+      - name: Update repository JSON
+        run: |
+          cp /tmp/xau-feed.json xau-macro-monitor.json
+
+          if git diff --quiet -- xau-macro-monitor.json; then
+            echo "No new feed data."
+            exit 0
+          fi
+
+          git config user.name "xau-feed-bot"
+          git config user.email "xau-feed-bot@users.noreply.github.com"
+          git add xau-macro-monitor.json
+          git commit -m "Update XAU daily feed"
+          git push
